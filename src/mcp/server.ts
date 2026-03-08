@@ -12,6 +12,7 @@ import {
 import { appendFileSync } from 'node:fs'
 import { Orchestrator } from '../core/orchestrator.ts'
 import { loadConfig } from '../core/types.ts'
+import { VERSION } from '../core/version.ts'
 
 const config = loadConfig()
 const orchestrator = new Orchestrator(config)
@@ -19,7 +20,7 @@ const orchestrator = new Orchestrator(config)
 const server = new Server(
   {
     name: 'coreops',
-    version: '1.0.0',
+    version: VERSION,
   },
   {
     capabilities: {

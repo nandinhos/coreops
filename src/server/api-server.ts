@@ -65,9 +65,11 @@ export function createApiServer(orchestrator: Orchestrator, options: ServerOptio
               'GET  /status',
               'GET  /backlog',
               'POST /next',
+              'POST /start',
               'GET  /metrics',
               'GET  /memory',
               'GET  /events',
+              'GET  /timeline',
             ],
           })
         }

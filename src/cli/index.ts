@@ -14,8 +14,7 @@ import { memoryCommand } from './commands/memory.ts'
 import { metricsCommand } from './commands/metrics.ts'
 import { serveCommand } from './commands/serve.ts'
 import { initProjectCommand } from './commands/init-project.ts'
-
-const VERSION = '0.1.0'
+import { VERSION } from '../core/version.ts'
 
 const HELP = `
 CoreOps v${VERSION} — Orquestração cognitiva de desenvolvimento de software

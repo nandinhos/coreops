@@ -130,7 +130,7 @@ describe('Pipeline Integration', () => {
     expect(events).toContain('planner:done')
   })
 
-  test('deve salvar e recuperar backlog', () => {
+  test('deve salvar e recuperar backlog', async () => {
     const plan = {
       project: 'test',
       objective: 'Implementar autenticação',
@@ -149,7 +149,7 @@ describe('Pipeline Integration', () => {
       ],
     }
 
-    backlogStore.savePlan(plan)
+    await backlogStore.savePlan(plan)
 
     const recovered = backlogStore.getPlan()
     expect(recovered).not.toBeNull()

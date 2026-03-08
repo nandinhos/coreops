@@ -21,7 +21,8 @@ quebrando tarefas complexas em microtarefas executáveis.
 - **Runtime:** Bun (TypeScript nativo, `bun:sqlite` built-in)
 - **LLM:** auto-detecta `claude CLI` → `gemini CLI` → `ANTHROPIC_API_KEY`
 - **Persistência:** `.coreops/` no projeto (JSON) + `~/.coreops/` global (SQLite)
-- **Testes:** `bun test` — 116 testes passando, 0 erros TypeScript
+- **Testes:** `bun test` — 131 testes passando, 0 erros TypeScript
+- **Versão:** `0.1.0` — centralizada em `src/core/version.ts` (lê de `package.json`)
 
 ---
 
@@ -127,7 +128,7 @@ ContextBuilder lê memórias relevantes automaticamente.
 ## Comandos essenciais
 
 ```bash
-bun test                          # 103 testes
+bun test                          # 131 testes
 bun run typecheck                 # 0 erros TypeScript
 
 bun run src/cli/index.ts --help
@@ -139,11 +140,33 @@ bun run src/cli/index.ts debug --timeline
 bun run src/cli/index.ts memory list
 bun run src/cli/index.ts serve --port 3000
 
-# CLI global (após bun link)
+# CLI global (após install.sh ou bun link)
 coreops --help
+
+# Instalador
+bash install.sh --dry-run         # simular
+bash install.sh --update          # atualizar
+bash install.sh --uninstall       # desinstalar (preserva ~/.coreops/)
+bash install.sh --mcp             # instalar + gerar .mcp.json
 ```
 
 ---
+
+## Instalação via install.sh
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/nandinhos/coreops/main/install.sh | bash
+```
+
+- Código instalado em `~/.local/share/coreops/repo/`
+- `~/.coreops/` (dados) **nunca é tocado** pelo installer
+- Sentinel em `~/.local/share/coreops/repo/.installed-version` (COMMIT + VERSION + BRANCH)
+- Detecta e instala Bun automaticamente se ausente
+
+## Versão centralizada
+
+`src/core/version.ts` — lê de `package.json` (única fonte de verdade).
+Usado por `src/cli/index.ts` e `src/mcp/server.ts`.
 
 ## Melhorias possíveis (não implementadas)
 
@@ -152,6 +175,7 @@ coreops --help
 - Multi-projeto simultâneo
 - Execução Docker real no Sandbox (atualmente valida com tsc + bun test)
 - Streaming de eventos via SSE no API server
+- Publicar no npm/jsr para instalação via `bunx coreops-mcp`
 
 ---
 

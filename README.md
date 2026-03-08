@@ -33,15 +33,31 @@ Agentes opcionais (ativados por env vars):
 
 ## Instalação
 
-```bash
-# Clonar e instalar dependências
-git clone <repo>
-cd coreops
-bun install
+**Instalação automática (recomendado):**
 
-# Instalar globalmente (disponível como `coreops` no terminal)
-bun link
+```bash
+curl -fsSL https://raw.githubusercontent.com/nandinhos/coreops/main/install.sh | bash
 ```
+
+O instalador detecta e instala Bun automaticamente se necessário, clona o repositório em `~/.local/share/coreops/repo/` e registra os binários globalmente.
+
+**Atualizar:**
+```bash
+bash install.sh --update
+```
+
+**Desinstalar** (preserva memória e cache em `~/.coreops/`):
+```bash
+bash install.sh --uninstall
+```
+
+**Outras flags:**
+| Flag | Comportamento |
+|------|---------------|
+| `--force` | Re-clone do zero (preserva `~/.coreops/`) |
+| `--dry-run` | Simula sem executar nada |
+| `--mcp` | Gera `.mcp.json` no diretório atual após instalar |
+| `--branch <nome>` | Instalar de branch específico |
 
 **Pré-requisito:** rodar dentro de uma sessão LLM ativa:
 - Claude Code CLI (detectado via `CLAUDECODE` env var)
@@ -49,6 +65,14 @@ bun link
 - Ou `ANTHROPIC_API_KEY` configurada no `.env` (fallback)
 
 > O CoreOps detecta automaticamente o LLM do ambiente — sem spawnar processos externos.
+
+### Separação de dados
+
+| Diretório | Conteúdo | Gerenciado por |
+|-----------|----------|----------------|
+| `~/.local/share/coreops/repo/` | Código instalado | `install.sh` (atualizável) |
+| `~/.coreops/` | `memory.db` + `llm-cache.db` | **Nunca tocado pelo installer** |
+| `<projeto>/.coreops/` | Estado do pipeline | Cada projeto |
 
 ---
 
@@ -171,10 +195,35 @@ Memória global persiste em `~/.coreops/`:
 
 ---
 
+## Integração MCP
+
+Após instalar, adicione ao `.mcp.json` do projeto alvo:
+
+```json
+{
+  "mcpServers": {
+    "coreops": {
+      "command": "bun",
+      "args": ["~/.local/share/coreops/repo/src/mcp/server.ts"]
+    }
+  }
+}
+```
+
+Ou use o comando de inicialização que faz isso automaticamente:
+
+```bash
+coreops init --mcp
+```
+
+Ferramentas MCP disponíveis: `coreops_status`, `coreops_start`, `coreops_next`, `coreops_backlog`, `coreops_metrics`, `coreops_memory_search`, `coreops_memory_add`, `coreops_events`.
+
+---
+
 ## Desenvolvimento
 
 ```bash
-bun test            # 116 testes
+bun test            # 131 testes
 bun run typecheck   # 0 erros TypeScript
 bun run dev         # Modo watch
 ```
@@ -186,4 +235,4 @@ bun run dev         # Modo watch
 - **Runtime:** [Bun](https://bun.sh) — TypeScript nativo, SQLite built-in, HTTP server
 - **LLM:** Auto-detecta Claude Code CLI → Gemini CLI → Anthropic API
 - **Persistência:** SQLite via `bun:sqlite` — sem ORMs, sem servidores externos
-- **Testes:** `bun test` — 116 testes, sem mocks de rede
+- **Testes:** `bun test` — 131 testes, sem mocks de rede

@@ -48,17 +48,19 @@ export class BacklogStore {
     return this.writeQueue
   }
 
-  savePlan(plan: ExecutionPlan): void {
-    const data = this.read()
-    data.plan = plan
-    data.tasks = plan.tasks
-    this.write(data)
+  savePlan(plan: ExecutionPlan): Promise<void> {
+    return this.atomicUpdate((data) => {
+      data.plan = plan
+      data.tasks = plan.tasks
+      return data
+    })
   }
 
-  saveMicrotasks(microtasks: Microtask[]): void {
-    const data = this.read()
-    data.microtasks = microtasks
-    this.write(data)
+  saveMicrotasks(microtasks: Microtask[]): Promise<void> {
+    return this.atomicUpdate((data) => {
+      data.microtasks = microtasks
+      return data
+    })
   }
 
   getPlan(): ExecutionPlan | null {

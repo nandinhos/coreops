@@ -60,6 +60,18 @@ describe('GET /', () => {
     expect(Array.isArray(body.endpoints)).toBe(true)
     expect((body.endpoints as unknown[]).length).toBeGreaterThan(0)
   })
+
+  test('endpoint list inclui POST /start', async () => {
+    const { body } = await get('/')
+    const endpoints = body.endpoints as string[]
+    expect(endpoints.some((e) => e.includes('POST') && e.includes('/start'))).toBe(true)
+  })
+
+  test('endpoint list inclui GET /timeline', async () => {
+    const { body } = await get('/')
+    const endpoints = body.endpoints as string[]
+    expect(endpoints.some((e) => e.includes('GET') && e.includes('/timeline'))).toBe(true)
+  })
 })
 
 describe('GET /status', () => {

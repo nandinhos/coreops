@@ -312,7 +312,7 @@ export class Orchestrator {
       workspace_path: state.workspace_path,
     })
 
-    this.backlogStore.savePlan(plan)
+    await this.backlogStore.savePlan(plan)
 
     const tasks = this.backlogStore.getTasks()
     this.stateStore.patch({
@@ -355,7 +355,7 @@ export class Orchestrator {
       microtasks.push(...generated)
     }
 
-    this.backlogStore.saveMicrotasks(microtasks)
+    await this.backlogStore.saveMicrotasks(microtasks)
     process.stderr.write('[CoreOps] ' + microtasks.length + ' microtask(s) gerada(s).\n')
   }
 
@@ -422,6 +422,7 @@ export class Orchestrator {
     for (let attempt = 1; attempt <= this.config.max_retries && !success; attempt++) {
       if (attempt > 1) {
         process.stderr.write('  [Retry] Tentativa ' + attempt + '/' + this.config.max_retries + '\n')
+        await this.backlogStore.updateMicrotask(microtask.id, { retry_count: attempt - 1 })
       }
 
       try {
@@ -695,14 +696,21 @@ export class Orchestrator {
   }
 
   async addMemory(title: string, content: string, type: string, project?: string): Promise<void> {
+    const VALID_TYPES = ['decision', 'pattern', 'lesson', 'context'] as const
+    type ValidMemoryType = typeof VALID_TYPES[number]
+    if (!VALID_TYPES.includes(type as ValidMemoryType)) {
+      throw new Error(
+        `Invalid memory type: "${type}". Valid types: ${VALID_TYPES.join(', ')}`,
+      )
+    }
     const state = this.stateStore.read()
-    await this.memory.add({
+    this.memory.add({
       project: project || state?.project || 'global',
-      phase: state?.current_phase || 'UNKNOWN',
-      type: type as any,
+      phase: state?.current_phase ?? PipelinePhase.IDEA,
+      type: type as ValidMemoryType,
       title,
       content,
-      tags: []
+      tags: [],
     })
   }
 
