@@ -1,0 +1,121 @@
+// ============================================================
+// CoreOps — MCP Server
+// Interface Standard para Controle do Orquestrador
+// ============================================================
+
+import { Server } from '@modelcontextprotocol/sdk/server/index.js'
+import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
+import {
+  CallToolRequestSchema,
+  ListToolsRequestSchema,
+} from '@modelcontextprotocol/sdk/types.js'
+import { appendFileSync } from 'node:fs'
+import { Orchestrator } from '../core/orchestrator.ts'
+import { loadConfig } from '../core/types.ts'
+
+const config = loadConfig()
+const orchestrator = new Orchestrator(config)
+
+const server = new Server(
+  {
+    name: 'coreops',
+    version: '1.0.0',
+  },
+  {
+    capabilities: {
+      tools: {},
+    },
+  },
+)
+
+// ----------------------------------------------------------
+// Definição das Ferramentas
+// ----------------------------------------------------------
+
+const TOOLS = [
+  { name: 'coreops_status', description: 'Status do projeto', inputSchema: { type: 'object', properties: {} } },
+  { name: 'coreops_start', description: 'Inicia projeto', inputSchema: { type: 'object', properties: { name: { type: 'string', description: 'Nome do projeto' }, description: { type: 'string', description: 'Descrição' } }, required: ['name', 'description'] } },
+  { name: 'coreops_next', description: 'Avança fase do pipeline', inputSchema: { type: 'object', properties: {} } },
+  { name: 'coreops_backlog', description: 'Exibe o backlog de tarefas', inputSchema: { type: 'object', properties: {} } },
+  { name: 'coreops_metrics', description: 'Exibe métricas do projeto', inputSchema: { type: 'object', properties: {} } },
+  { name: 'coreops_events', description: 'Lista eventos recentes', inputSchema: { type: 'object', properties: { limit: { type: 'number', description: 'Qtd de eventos' } } } },
+  { name: 'coreops_memory_add', description: 'Adiciona memória global', inputSchema: { type: 'object', properties: { title: { type: 'string' }, content: { type: 'string' }, type: { type: 'string' }, project: { type: 'string' } }, required: ['title', 'content', 'type'] } },
+  { name: 'coreops_memory_search', description: 'Busca memória global', inputSchema: { type: 'object', properties: { query: { type: 'string' }, project: { type: 'string' } }, required: ['query'] } },
+]
+
+// ----------------------------------------------------------
+// Handlers
+// ----------------------------------------------------------
+
+function ok(data: unknown) {
+  return { content: [{ type: 'text', text: JSON.stringify(data, null, 2) }] }
+}
+
+function err(message: string) {
+  return { content: [{ type: 'text', text: `Erro: ${message}` }], isError: true }
+}
+
+server.setRequestHandler(ListToolsRequestSchema, async () => ({
+  tools: TOOLS,
+}))
+
+server.setRequestHandler(CallToolRequestSchema, async (request) => {
+  const { name, arguments: args = {} } = request.params
+
+  try {
+    switch (name) {
+      case 'coreops_status':
+        if (!orchestrator.isInitialized()) {
+          return ok({ initialized: false, message: 'Projeto não inicializado.' })
+        }
+        return ok(orchestrator.getStatus())
+
+      case 'coreops_start': {
+        const { name: pName, description } = request.params.arguments as any
+        const state = await orchestrator.startProject(pName, description)
+        return { content: [{ type: 'text', text: JSON.stringify(state, null, 2) }] }
+      }
+
+      case 'coreops_next':
+        return { content: [{ type: 'text', text: JSON.stringify(await orchestrator.next(), null, 2) }] }
+
+      case 'coreops_backlog':
+        return { content: [{ type: 'text', text: JSON.stringify(orchestrator.getBacklog(), null, 2) }] }
+
+      case 'coreops_metrics':
+        return { content: [{ type: 'text', text: JSON.stringify(orchestrator.getMetrics(), null, 2) }] }
+
+      case 'coreops_events': {
+        const { limit } = (request.params.arguments || {}) as any
+        return { content: [{ type: 'text', text: JSON.stringify(orchestrator.getRecentEvents(limit), null, 2) }] }
+      }
+
+      case 'coreops_memory_add': {
+        const { title, content, type, project } = request.params.arguments as any
+        await orchestrator.addMemory(title, content, type, project)
+        return { content: [{ type: 'text', text: 'Memória adicionada com sucesso.' }] }
+      }
+
+      case 'coreops_memory_search': {
+        const { query, project } = request.params.arguments as any
+        const results = await orchestrator.searchMemory(query, project)
+        return { content: [{ type: 'text', text: JSON.stringify(results, null, 2) }] }
+      }
+
+      default:
+        return err(`Ferramenta desconhecida: ${name}`)
+    }
+  } catch (e) {
+    return err(String(e))
+  }
+})
+
+async function main() {
+  const transport = new StdioServerTransport()
+  await server.connect(transport)
+}
+
+main().catch((e) => {
+  appendFileSync('/tmp/coreops_fatal.log', `[${new Date().toISOString()}] FATAL: ${String(e)}\n`)
+  process.exit(1)
+})
