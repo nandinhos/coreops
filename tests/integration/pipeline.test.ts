@@ -50,6 +50,7 @@ describe('Pipeline Integration', () => {
       last_updated: new Date().toISOString(),
       last_transition: null,
       workspace_path: tmpDir,
+      llm_source: null,
     }
     stateStore.write(initialState)
   })

@@ -13,8 +13,9 @@ import { BacklogStore } from '../workspace/backlog-store.ts'
 import { HistoryLog } from '../workspace/history-log.ts'
 import { AgentRegistry } from '../agents/agent-registry.ts'
 import { AgentRunner } from '../agents/agent-runner.ts'
-import { createAdapter, type AdapterSource } from '../llm/adapter-factory.ts'
+import { createAdapter, detectCurrentLLM, type AdapterSource } from '../llm/adapter-factory.ts'
 import type { LLMAdapter } from '../llm/types.ts'
+import { ParallelExecutionEngine } from './parallel-engine.ts'
 import { MemoryStore } from '../memory/memory-store.ts'
 import { EventStore, createProjectEventStore } from '../debug/event-store.ts'
 import { randomUUID } from 'node:crypto'
@@ -47,6 +48,7 @@ export interface OrchestratorStatus {
   tasks_pending: number
   started_at: string
   last_updated: string
+  llm_source: string | null
 }
 
 export class Orchestrator {
@@ -195,6 +197,8 @@ export class Orchestrator {
     // Inicializar workspace
     this.workspace.init()
 
+    const llmSource = detectCurrentLLM()
+
     const state: ProjectState = {
       project: name,
       description,
@@ -207,10 +211,17 @@ export class Orchestrator {
       last_updated: new Date().toISOString(),
       last_transition: null,
       workspace_path: process.cwd(),
+      llm_source: llmSource,
     }
 
     this.stateStore.write(state)
     this.historyLog.projectStarted(name)
+
+    this.events.record('llm_detected', {
+      phase: PipelinePhase.IDEA,
+      status: 'ok',
+      payload: { source: llmSource },
+    })
 
     this.memory.add({
       project: name,
@@ -360,34 +371,29 @@ export class Orchestrator {
 
     process.stderr.write('[CoreOps] Executando ' + pendingMicrotasks.length + ' microtask(s)...\n')
 
-    // Execução por ondas baseada em dependências
-    // Microtasks sem deps pendentes rodam em paralelo (mesmo nível)
-    const completed = new Set<string>()
-    let remaining = [...pendingMicrotasks]
+    const engine = new ParallelExecutionEngine({
+      max_concurrency: 0,
+      onWaveStart: async (wave, ids) => {
+        process.stderr.write('[CoreOps] Onda ' + wave + ': ' + ids.length + ' microtask(s) em paralelo...\n')
+        await this.eventBus.emit('wave_started', { wave, microtask_ids: ids })
+      },
+      onWaveEnd: async (result) => {
+        await this.eventBus.emit('wave_completed', {
+          wave: result.wave_number,
+          completed: result.completed,
+          failed: result.failed,
+        })
+        this.events.record('wave_completed', {
+          payload: {
+            wave: result.wave_number,
+            completed_count: result.completed.length,
+            failed_count: result.failed.length,
+          },
+        })
+      },
+    })
 
-    while (remaining.length > 0) {
-      const wave = remaining.filter((m) => m.dependencies.every((dep) => completed.has(dep)))
-
-      if (wave.length === 0) {
-        // Dependências circulares ou não resolvíveis — execução sequencial do restante
-        process.stderr.write('[CoreOps] Dependências não resolvíveis, executando sequencialmente.\n')
-        for (const m of remaining) {
-          await this.executeMicrotask(m)
-          completed.add(m.id)
-        }
-        break
-      }
-
-      if (wave.length > 1) {
-        process.stderr.write('[CoreOps] Onda paralela: ' + wave.length + ' microtask(s)...\n')
-        await Promise.all(wave.map((m) => this.executeMicrotask(m)))
-      } else {
-        await this.executeMicrotask(wave[0]!)
-      }
-
-      wave.forEach((m) => completed.add(m.id))
-      remaining = remaining.filter((m) => !completed.has(m.id))
-    }
+    await engine.run(pendingMicrotasks, (m) => this.executeMicrotask(m))
   }
 
   private async runReviewPhase(): Promise<void> {
@@ -404,7 +410,7 @@ export class Orchestrator {
     process.stderr.write('\n  [Microtask] ' + microtask.description + '\n')
 
     const t0 = Date.now()
-    this.backlogStore.updateMicrotask(microtask.id, { status: 'in_progress' })
+    await this.backlogStore.updateMicrotask(microtask.id, { status: 'in_progress' })
     await this.eventBus.emit('microtask_started', { id: microtask.id, description: microtask.description })
 
     const state = this.stateStore.read()
@@ -538,7 +544,7 @@ export class Orchestrator {
 
     if (success) {
       const duration = Date.now() - t0
-      this.backlogStore.updateMicrotask(microtask.id, {
+      await this.backlogStore.updateMicrotask(microtask.id, {
         status: 'completed',
         completed_at: new Date().toISOString(),
       })
@@ -557,7 +563,7 @@ export class Orchestrator {
         })
       }
     } else {
-      this.backlogStore.updateMicrotask(microtask.id, { status: 'failed' })
+      await this.backlogStore.updateMicrotask(microtask.id, { status: 'failed' })
       await this.eventBus.emit('microtask_failed', {
         id: microtask.id,
         description: microtask.description,
@@ -634,6 +640,7 @@ export class Orchestrator {
       tasks_pending: state.tasks_pending,
       started_at: state.started_at,
       last_updated: state.last_updated,
+      llm_source: state.llm_source ?? null,
     }
   }
 

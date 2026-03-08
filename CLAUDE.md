@@ -21,7 +21,7 @@ quebrando tarefas complexas em microtarefas executáveis.
 - **Runtime:** Bun (TypeScript nativo, `bun:sqlite` built-in)
 - **LLM:** auto-detecta `claude CLI` → `gemini CLI` → `ANTHROPIC_API_KEY`
 - **Persistência:** `.coreops/` no projeto (JSON) + `~/.coreops/` global (SQLite)
-- **Testes:** `bun test` — 103 testes passando, 0 erros TypeScript
+- **Testes:** `bun test` — 116 testes passando, 0 erros TypeScript
 
 ---
 
@@ -39,7 +39,8 @@ quebrando tarefas complexas em microtarefas executáveis.
 | Core Orchestrator | `src/core/orchestrator.ts` | ✓ |
 | Agent interface + Runner + Registry | `src/agents/agent*.ts` | ✓ |
 | Planner Agent | `src/agents/planner.ts` | ✓ |
-| MicrotaskGenerator | `src/agents/microtask-generator.ts` | ✓ |
+| MicrotaskGenerator | `src/agents/microtask-generator.ts` | ✓ (gera DAG + concurrency_group) |
+| ParallelExecutionEngine | `src/core/parallel-engine.ts` | ✓ Phase 11 (DAG waves + mutex) |
 | ContextBuilder | `src/agents/context-builder.ts` | ✓ |
 | Coder Agent | `src/agents/coder.ts` | ✓ |
 | Reviewer Agent | `src/agents/reviewer.ts` | ✓ |
@@ -82,9 +83,17 @@ Auto-detecção em `src/llm/adapter-factory.ts`:
 
 Cache SQLite (`~/.coreops/llm-cache.db`) ativo por padrão — desativar com `COREOPS_LLM_CACHE=false`.
 
-### Paralelismo de Microtasks
-`runCodingPhase()` executa por ondas: microtasks sem dependências pendentes rodam em `Promise.all()`.
-Fallback sequencial automático em caso de dependências circulares.
+### Paralelismo de Microtasks (Phase 11)
+`ParallelExecutionEngine` (`src/core/parallel-engine.ts`) resolve DAG de dependências em ondas.
+- `Microtask.dependencies[]` define o grafo; `concurrency_group` agrupa semântica
+- `max_concurrency: 0` = ilimitado por onda; qualquer valor > 0 limita slots simultâneos
+- `BacklogStore.updateMicrotask()` serializado via `writeQueue` (mutex — sem race conditions)
+- Eventos `wave_started` / `wave_completed` emitidos no EventBus
+- Fallback sequencial automático em caso de dependências circulares
+
+### Detecção de LLM (Phase 11)
+`detectCurrentLLM()` em `src/llm/adapter-factory.ts` — identifica o LLM do ambiente via env vars
+(sem spawnar processos). Resultado persistido em `ProjectState.llm_source` e exibido no `coreops status`.
 
 ### Advanced Agents (Phase 8)
 Opt-in via env vars — não aumentam latência por padrão:

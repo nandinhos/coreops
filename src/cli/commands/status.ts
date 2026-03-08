@@ -31,6 +31,7 @@ export function statusCommand(args: string[]): void {
     console.log(``)
     console.log(`Projeto:        ${status.project}`)
     console.log(`Descrição:      ${status.description}`)
+    console.log(`LLM:            ${status.llm_source ?? 'desconhecido'}`)
     console.log(`Fase atual:     ${status.current_phase}`)
     console.log(`Próxima fase:   ${status.next_phase ?? 'Concluído'}`)
     console.log(``)

@@ -25,6 +25,17 @@ export interface AdapterResult {
   source: AdapterSource
 }
 
+/**
+ * Detecta qual LLM está ativo no ambiente ATUAL via env vars — sem spawnar processos.
+ * Retorna o identificador do LLM da sessão que hospeda este processo CoreOps.
+ */
+export function detectCurrentLLM(): AdapterSource | null {
+  if (process.env['CLAUDECODE'] || process.env['CLAUDE_CODE_SSE_PORT']) return 'claude-cli'
+  if (process.env['GEMINI_CLI_IDE_SERVER_PORT'] || process.env['ANTIGRAVITY_AGENT']) return 'gemini-cli'
+  if (process.env['ANTHROPIC_API_KEY']) return 'anthropic-api'
+  return null
+}
+
 export async function createAdapter(config: {
   anthropic_api_key?: string
   model?: string
@@ -94,5 +105,9 @@ export async function createAdapter(config: {
     finalAdapter = new CachedLLMAdapter(finalAdapter, cache)
   }
 
-  return { adapter: finalAdapter, source: 'fallback-chain' }
+  const source: AdapterSource = adaptersList.length === 1
+    ? (prefer ?? detectCurrentLLM() ?? 'fallback-chain')
+    : 'fallback-chain'
+
+  return { adapter: finalAdapter, source }
 }

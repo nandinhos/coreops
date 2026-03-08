@@ -17,8 +17,8 @@ Cada fase é executada por agentes especializados:
 | Fase | Agente | O que faz |
 |------|--------|-----------|
 | PLANNING | Planner | Gera plano de tarefas com objetivo e estratégia |
-| TDD | MicrotaskGenerator | Quebra tarefas em microtasks com dependências |
-| CODING | Coder + Reviewer + Tester + Validator + Debugger | Escreve, revisa, testa e valida código iterativamente |
+| TDD | MicrotaskGenerator | Quebra tarefas em microtasks com DAG de dependências e `concurrency_group` |
+| CODING | ParallelEngine + Coder + Reviewer + Tester + Validator + Debugger | Executa microtasks em ondas paralelas, escreve, revisa, testa e valida |
 | REVIEW | Reviewer | Revisão final do código produzido |
 
 Agentes opcionais (ativados por env vars):
@@ -43,10 +43,12 @@ bun install
 bun link
 ```
 
-**Pré-requisito:** um dos seguintes LLMs disponível no ambiente:
-- Claude Code CLI (`claude --version`)
-- Gemini CLI (`gemini --version`)
-- `ANTHROPIC_API_KEY` configurada no `.env`
+**Pré-requisito:** rodar dentro de uma sessão LLM ativa:
+- Claude Code CLI (detectado via `CLAUDECODE` env var)
+- Gemini CLI (detectado via `GEMINI_CLI_IDE_SERVER_PORT`)
+- Ou `ANTHROPIC_API_KEY` configurada no `.env` (fallback)
+
+> O CoreOps detecta automaticamente o LLM do ambiente — sem spawnar processos externos.
 
 ---
 
@@ -140,9 +142,9 @@ cp .env.example .env
 ```
 src/
 ├── cli/              # Entrypoint e comandos (start, next, status, serve, ...)
-├── core/             # Orchestrator, StateMachine, EventBus, Types
+├── core/             # Orchestrator, StateMachine, EventBus, Types, ParallelEngine
 ├── agents/           # Todos os agentes (Planner, Coder, Reviewer, ...)
-├── llm/              # Adapters (Claude CLI, Gemini CLI, Anthropic API) + Cache
+├── llm/              # Adapters + detectCurrentLLM() + Cache
 ├── workspace/        # Persistência local em .coreops/
 ├── memory/           # Memory Layer global (~/.coreops/memory.db, SQLite FTS5)
 ├── debug/            # EventStore (.coreops/debug/events.db)
@@ -172,7 +174,7 @@ Memória global persiste em `~/.coreops/`:
 ## Desenvolvimento
 
 ```bash
-bun test            # 103 testes
+bun test            # 116 testes
 bun run typecheck   # 0 erros TypeScript
 bun run dev         # Modo watch
 ```
@@ -184,4 +186,4 @@ bun run dev         # Modo watch
 - **Runtime:** [Bun](https://bun.sh) — TypeScript nativo, SQLite built-in, HTTP server
 - **LLM:** Auto-detecta Claude Code CLI → Gemini CLI → Anthropic API
 - **Persistência:** SQLite via `bun:sqlite` — sem ORMs, sem servidores externos
-- **Testes:** `bun test` — 103 testes, sem mocks de rede
+- **Testes:** `bun test` — 116 testes, sem mocks de rede

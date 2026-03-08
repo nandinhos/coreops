@@ -1,6 +1,7 @@
 // ============================================================
 // CoreOps — Backlog Store
-// Persistência de tarefas e microtasks
+// Persistência de tarefas e microtasks com mutex para evitar
+// race conditions em updates concorrentes de microtasks.
 // ============================================================
 
 import { readFileSync, writeFileSync, existsSync } from 'node:fs'
@@ -15,6 +16,8 @@ interface BacklogData {
 
 export class BacklogStore {
   private readonly path: string
+  // Fila de writes serializados para evitar race conditions em execução paralela
+  private writeQueue: Promise<void> = Promise.resolve()
 
   constructor(private readonly workspace: WorkspaceManager) {
     this.path = workspace.getBacklogPath()
@@ -30,6 +33,19 @@ export class BacklogStore {
 
   private write(data: BacklogData): void {
     writeFileSync(this.path, JSON.stringify(data, null, 2), 'utf-8')
+  }
+
+  /**
+   * Executa uma operação read-modify-write de forma serializada.
+   * Garante que updates concorrentes de microtasks não se sobrescrevam.
+   */
+  private atomicUpdate(fn: (data: BacklogData) => BacklogData): Promise<void> {
+    this.writeQueue = this.writeQueue.then(() => {
+      const data = this.read()
+      const updated = fn(data)
+      this.write(updated)
+    })
+    return this.writeQueue
   }
 
   savePlan(plan: ExecutionPlan): void {
@@ -63,9 +79,12 @@ export class BacklogStore {
     this.write(data)
   }
 
-  updateMicrotask(microtaskId: string, patch: Partial<Microtask>): void {
-    const data = this.read()
-    data.microtasks = data.microtasks.map((m) => (m.id === microtaskId ? { ...m, ...patch } : m))
-    this.write(data)
+  updateMicrotask(microtaskId: string, patch: Partial<Microtask>): Promise<void> {
+    return this.atomicUpdate((data) => {
+      data.microtasks = data.microtasks.map((m) =>
+        m.id === microtaskId ? { ...m, ...patch } : m,
+      )
+      return data
+    })
   }
 }

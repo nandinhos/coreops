@@ -47,6 +47,7 @@ export interface ProjectState {
   last_updated: string
   last_transition: string | null
   workspace_path: string
+  llm_source: string | null
 }
 
 // ----------------------------------------------------------
@@ -68,6 +69,7 @@ export interface Microtask {
   task_id: string
   description: string
   dependencies: string[]
+  concurrency_group: string | null
   status: 'pending' | 'in_progress' | 'completed' | 'failed'
   retry_count: number
   created_at: string
@@ -136,6 +138,8 @@ export type EventType =
   | 'microtask_started'
   | 'microtask_completed'
   | 'microtask_failed'
+  | 'wave_started'
+  | 'wave_completed'
   | 'agent_spawned'
   | 'agent_completed'
   | 'agent_failed'

@@ -23,6 +23,7 @@ function createTestState(phase: PipelinePhase = PipelinePhase.IDEA): ProjectStat
     last_updated: new Date().toISOString(),
     last_transition: null,
     workspace_path: '/tmp/test',
+    llm_source: null,
   }
 }
 
