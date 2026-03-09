@@ -8,10 +8,17 @@ import type { LLMAdapter } from '../llm/types.ts'
 import { parseJsonResponse } from '../llm/anthropic-adapter.ts'
 import type { CodePatch, DebugAnalysis, Microtask } from '../core/types.ts'
 
+export interface PriorSolution {
+  root_cause: string
+  fix_description: string
+  occurrence_count: number
+}
+
 export interface DebuggerInput {
   errors: string[]
   patches: CodePatch[]
   microtask: Microtask
+  prior_solution?: PriorSolution | null
 }
 
 const SYSTEM_PROMPT = `Você é o Debugger Agent do CoreOps — especialista em diagnóstico e correção de erros.
@@ -58,12 +65,22 @@ export class DebuggerAgent extends BaseAgent<DebuggerInput, DebugAnalysis> {
       .map((p) => `### ${p.file}\n\`\`\`\n${p.content}\n\`\`\``)
       .join('\n\n')
 
+    const priorContext = input.prior_solution
+      ? [
+          '\n**SOLUÇÃO ANTERIOR PARA ERRO SIMILAR (aplicada ' + input.prior_solution.occurrence_count + 'x):**',
+          'Causa raiz: ' + input.prior_solution.root_cause,
+          'Como foi resolvido: ' + input.prior_solution.fix_description,
+          'Considere se esta solução se aplica antes de propor uma nova.',
+          '',
+        ].join('\n')
+      : ''
+
     const response = await this.llm.complete({
       system: SYSTEM_PROMPT,
       messages: [
         {
           role: 'user',
-          content: `Microtask: ${input.microtask.description}\n\nErros encontrados:\n\`\`\`\n${errorsText}\n\`\`\`\n\nCódigo atual:\n\n${patchesText}\n\nAnalise e corrija os erros.`,
+          content: `Microtask: ${input.microtask.description}\n\nErros encontrados:\n\`\`\`\n${errorsText}\n\`\`\`\n\nCódigo atual:\n\n${patchesText}${priorContext}\n\nAnalise e corrija os erros.`,
         },
       ],
       max_tokens: 4096,

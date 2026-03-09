@@ -6,6 +6,8 @@
 import type { Agent } from './agent.ts'
 
 export type AgentType =
+  | 'brainstorm'
+  | 'architect'
   | 'planner'
   | 'microtask-generator'
   | 'context-builder'

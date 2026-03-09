@@ -6,7 +6,8 @@
 import { BaseAgent } from './agent.ts'
 import type { LLMAdapter } from '../llm/types.ts'
 import { parseJsonResponse } from '../llm/anthropic-adapter.ts'
-import type { CodePatch, CodeReview, Microtask } from '../core/types.ts'
+import type { CodePatch, CodeReview, Microtask, Skill } from '../core/types.ts'
+import { buildSkillContext } from '../skills/skill-registry.ts'
 
 export interface ReviewerInput {
   patches: CodePatch[]
@@ -44,7 +45,10 @@ FORMATO:
 export class ReviewerAgent extends BaseAgent<ReviewerInput, CodeReview> {
   readonly name = 'reviewer'
 
-  constructor(private readonly llm: LLMAdapter) {
+  constructor(
+    private readonly llm: LLMAdapter,
+    private readonly skills: Skill[] = [],
+  ) {
     super()
   }
 
@@ -54,7 +58,7 @@ export class ReviewerAgent extends BaseAgent<ReviewerInput, CodeReview> {
       .join('\n\n')
 
     const response = await this.llm.complete({
-      system: SYSTEM_PROMPT,
+      system: SYSTEM_PROMPT + buildSkillContext('reviewer', this.skills),
       messages: [
         {
           role: 'user',

@@ -6,7 +6,8 @@
 import { BaseAgent } from './agent.ts'
 import type { LLMAdapter } from '../llm/types.ts'
 import { parseJsonResponse } from '../llm/anthropic-adapter.ts'
-import type { CodePatch, Microtask } from '../core/types.ts'
+import type { CodePatch, Microtask, Skill } from '../core/types.ts'
+import { buildSkillContext } from '../skills/skill-registry.ts'
 
 export interface CoderInput {
   microtask: Microtask
@@ -41,13 +42,17 @@ Ações disponíveis: "create" | "modify" | "delete"`
 export class CoderAgent extends BaseAgent<CoderInput, CodePatch[]> {
   readonly name = 'coder'
 
-  constructor(private readonly llm: LLMAdapter) {
+  constructor(
+    private readonly llm: LLMAdapter,
+    private readonly skills: Skill[] = [],
+  ) {
     super()
   }
 
   async execute(input: CoderInput): Promise<CodePatch[]> {
+    const skillContext = buildSkillContext('coder', this.skills)
     const response = await this.llm.complete({
-      system: SYSTEM_PROMPT,
+      system: SYSTEM_PROMPT + skillContext,
       messages: [
         {
           role: 'user',

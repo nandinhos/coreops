@@ -24,6 +24,11 @@ function createTestState(phase: PipelinePhase = PipelinePhase.IDEA): ProjectStat
     last_transition: null,
     workspace_path: '/tmp/test',
     llm_source: null,
+    brainstorm_result: null,
+    architecture_spec: null,
+    pending_checkpoint: null,
+    active_skills: [],
+    brainstorm_session: null,
   }
 }
 

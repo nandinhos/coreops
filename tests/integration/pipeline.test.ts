@@ -51,6 +51,11 @@ describe('Pipeline Integration', () => {
       last_transition: null,
       workspace_path: tmpDir,
       llm_source: null,
+      brainstorm_result: null,
+      architecture_spec: null,
+      pending_checkpoint: null,
+      active_skills: [],
+      brainstorm_session: null,
     }
     stateStore.write(initialState)
   })

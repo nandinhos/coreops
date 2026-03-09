@@ -36,7 +36,30 @@ const server = new Server(
 const TOOLS = [
   { name: 'coreops_status', description: 'Status do projeto', inputSchema: { type: 'object', properties: {} } },
   { name: 'coreops_start', description: 'Inicia projeto', inputSchema: { type: 'object', properties: { name: { type: 'string', description: 'Nome do projeto' }, description: { type: 'string', description: 'Descrição' } }, required: ['name', 'description'] } },
-  { name: 'coreops_next', description: 'Avança fase do pipeline', inputSchema: { type: 'object', properties: {} } },
+  {
+    name: 'coreops_next',
+    description: 'Avança fase do pipeline. Se retornar requires_input: true, use coreops_answer para responder as perguntas antes de avançar.',
+    inputSchema: { type: 'object', properties: {} },
+  },
+  {
+    name: 'coreops_answer',
+    description: 'Responde às perguntas do checkpoint para desbloquear o avanço de fase. Para checkpoints MANUAIS (artesanato), passe confirm: true para confirmar explicitamente.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        answers: {
+          type: 'object',
+          description: 'Mapa de id da pergunta → resposta. Ex: { "q1": "PostgreSQL", "q2": "JWT" }',
+          additionalProperties: { type: 'string' },
+        },
+        confirm: {
+          type: 'boolean',
+          description: 'OBRIGATÓRIO para checkpoints manuais: confirme explicitamente que você (usuário) está respondendo, não o LLM automaticamente.',
+        },
+      },
+      required: ['answers'],
+    },
+  },
   { name: 'coreops_backlog', description: 'Exibe o backlog de tarefas', inputSchema: { type: 'object', properties: {} } },
   { name: 'coreops_metrics', description: 'Exibe métricas do projeto', inputSchema: { type: 'object', properties: {} } },
   { name: 'coreops_events', description: 'Lista eventos recentes', inputSchema: { type: 'object', properties: { limit: { type: 'number', description: 'Qtd de eventos' } } } },
@@ -77,8 +100,16 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         return { content: [{ type: 'text', text: JSON.stringify(state, null, 2) }] }
       }
 
-      case 'coreops_next':
-        return { content: [{ type: 'text', text: JSON.stringify(await orchestrator.next(), null, 2) }] }
+      case 'coreops_next': {
+        const result = await orchestrator.next()
+        return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] }
+      }
+
+      case 'coreops_answer': {
+        const { answers, confirm } = (request.params.arguments || {}) as { answers: Record<string, string>; confirm?: boolean }
+        const resolution = orchestrator.resolveCheckpoint(answers, confirm)
+        return { content: [{ type: 'text', text: JSON.stringify(resolution, null, 2) }] }
+      }
 
       case 'coreops_backlog':
         return { content: [{ type: 'text', text: JSON.stringify(orchestrator.getBacklog(), null, 2) }] }

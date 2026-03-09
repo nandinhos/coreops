@@ -4,7 +4,7 @@
 // ============================================================
 
 import { PipelinePhase } from './types.ts'
-import type { ProjectState, Task, Microtask, CoreOpsConfig, ExecutionPlan } from './types.ts'
+import type { ProjectState, Task, Microtask, CoreOpsConfig, ExecutionPlan, BrainstormResult, CheckpointState, CheckpointQuestion, ArchitectureSpec } from './types.ts'
 import { EventBus } from './event-bus.ts'
 import { StateMachine } from './state-machine.ts'
 import { WorkspaceManager } from '../workspace/workspace-manager.ts'
@@ -15,14 +15,19 @@ import { AgentRegistry } from '../agents/agent-registry.ts'
 import { AgentRunner } from '../agents/agent-runner.ts'
 import { createAdapter, detectCurrentLLM, type AdapterSource } from '../llm/adapter-factory.ts'
 import type { LLMAdapter } from '../llm/types.ts'
+import { detectSkills } from '../skills/skill-registry.ts'
+import type { Skill } from '../core/types.ts'
 import { ParallelExecutionEngine } from './parallel-engine.ts'
 import { MemoryStore } from '../memory/memory-store.ts'
+import { ErrorStore } from '../memory/error-store.ts'
 import { EventStore, createProjectEventStore } from '../debug/event-store.ts'
 import { randomUUID } from 'node:crypto'
 
 // Importações dos agentes (registradas dinamicamente)
+import { BrainstormAgent, type BrainstormInput } from '../agents/brainstorm.ts'
+import { ArchitectAgent, type ArchitectInput } from '../agents/architect.ts'
 import { PlannerAgent, type PlannerInput } from '../agents/planner.ts'
-import { MicrotaskGeneratorAgent } from '../agents/microtask-generator.ts'
+import { MicrotaskGeneratorAgent, type MicrotaskGeneratorInput } from '../agents/microtask-generator.ts'
 import { ContextBuilderAgent } from '../agents/context-builder.ts'
 import { CoderAgent } from '../agents/coder.ts'
 import { ReviewerAgent } from '../agents/reviewer.ts'
@@ -49,6 +54,13 @@ export interface OrchestratorStatus {
   started_at: string
   last_updated: string
   llm_source: string | null
+  pending_checkpoint: CheckpointState | null
+  brainstorm_session: {
+    interactive: boolean
+    session_state?: string
+    open_questions?: string[]
+    approaches?: string[]
+  } | null
 }
 
 export class Orchestrator {
@@ -61,10 +73,12 @@ export class Orchestrator {
   private readonly registry: AgentRegistry
   private readonly runner: AgentRunner
   private readonly memory: MemoryStore
+  private readonly errorStore: ErrorStore
   private readonly events: EventStore
   // LLM é inicializado lazy (async) na primeira chamada
   private llm: LLMAdapter | null = null
   private adapterSource: AdapterSource | null = null
+  private activeSkills: Skill[] = []
 
   constructor(private readonly config: CoreOpsConfig) {
     this.workspace = new WorkspaceManager(process.cwd())
@@ -81,6 +95,7 @@ export class Orchestrator {
       config.agent_timeout_ms,
     )
     this.memory = new MemoryStore()
+    this.errorStore = new ErrorStore()
     this.events = createProjectEventStore()
 
     this.setupEventLogging()
@@ -101,7 +116,7 @@ export class Orchestrator {
     this.adapterSource = result.source
     process.stderr.write('[CoreOps] LLM: ' + result.source + '\n')
 
-    this.registerAgents(result.adapter)
+    this.registerAgents(result.adapter, this.activeSkills)
     return this.llm
   }
 
@@ -109,13 +124,15 @@ export class Orchestrator {
   // Setup
   // ----------------------------------------------------------
 
-  private registerAgents(llm: LLMAdapter): void {
+  private registerAgents(llm: LLMAdapter, skills: Skill[] = []): void {
+    this.registry.register('brainstorm', new BrainstormAgent(llm))
+    this.registry.register('architect', new ArchitectAgent(llm))
     this.registry.register('planner', new PlannerAgent(llm))
     this.registry.register('microtask-generator', new MicrotaskGeneratorAgent(llm))
     this.registry.register('context-builder', new ContextBuilderAgent(this.workspace, this.memory))
-    this.registry.register('coder', new CoderAgent(llm))
-    this.registry.register('reviewer', new ReviewerAgent(llm))
-    this.registry.register('tester', new TesterAgent(llm))
+    this.registry.register('coder', new CoderAgent(llm, skills))
+    this.registry.register('reviewer', new ReviewerAgent(llm, skills))
+    this.registry.register('tester', new TesterAgent(llm, skills))
     this.registry.register('validator', new ValidatorAgent())
     this.registry.register('debugger', new DebuggerAgent(llm))
 
@@ -212,6 +229,11 @@ export class Orchestrator {
       last_transition: null,
       workspace_path: process.cwd(),
       llm_source: llmSource,
+      brainstorm_result: null,
+      architecture_spec: null,
+      pending_checkpoint: null,
+      active_skills: [],
+      brainstorm_session: null,
     }
 
     this.stateStore.write(state)
@@ -275,6 +297,12 @@ export class Orchestrator {
     await this.eventBus.emit('phase_started', { phase })
 
     switch (phase) {
+      case PipelinePhase.BRAINSTORM:
+        await this.runBrainstormPhase()
+        break
+      case PipelinePhase.ARCHITECTURE:
+        await this.runArchitecturePhase()
+        break
       case PipelinePhase.PLANNING:
         await this.runPlanningPhase()
         break
@@ -295,8 +323,205 @@ export class Orchestrator {
   }
 
   // ----------------------------------------------------------
+  // Checkpoint
+  // ----------------------------------------------------------
+
+  createCheckpoint(phase: PipelinePhase, questions: string[], manual: boolean = false): void {
+    const checkpointQuestions: CheckpointQuestion[] = questions.map((q, i) => ({
+      id: `q${i + 1}`,
+      question: q,
+      required: true,
+    }))
+
+    const checkpoint: CheckpointState = {
+      phase,
+      questions: checkpointQuestions,
+      answers: {},
+      resolved: false,
+      manual,  // true = artesanato manual
+    }
+
+    this.stateStore.patch({ pending_checkpoint: checkpoint })
+    this.events.record('checkpoint_created', {
+      phase,
+      status: 'ok',
+      payload: { question_count: questions.length, manual },
+    })
+    process.stderr.write(`[CoreOps] Checkpoint ${manual ? 'MANUAL ' : ''}criado com ${questions.length} pergunta(s).\n`)
+  }
+
+  resolveCheckpoint(answers: Record<string, string>, confirm: boolean = false): { resolved: boolean; pending: string[]; manual_confirm_required?: boolean; message?: string } {
+    const state = this.stateStore.read()
+    if (!state?.pending_checkpoint) {
+      return { resolved: true, pending: [] }
+    }
+
+    const checkpoint = state.pending_checkpoint
+    
+    // Para checkpoints manuais, exigir confirmação explícita
+    if (checkpoint.manual && !confirm) {
+      return { 
+        resolved: false, 
+        pending: checkpoint.questions.map(q => q.question),
+        manual_confirm_required: true,
+        message: '⚠️ Este checkpoint é MANUAL. Para confirmar, use coreops_answer com { answers: {...}, confirm: true }' 
+      }
+    }
+
+    const updated: CheckpointState = {
+      ...checkpoint,
+      answers: { ...checkpoint.answers, ...answers },
+    }
+
+    const pending = checkpoint.questions
+      .filter(q => q.required && !updated.answers[q.id])
+      .map(q => q.question)
+
+    updated.resolved = pending.length === 0
+    this.stateStore.patch({ pending_checkpoint: updated })
+
+    if (updated.resolved) {
+      this.events.record('checkpoint_resolved', {
+        phase: checkpoint.phase,
+        status: 'ok',
+        payload: { answers_count: Object.keys(updated.answers).length, manual: checkpoint.manual },
+      })
+      process.stderr.write('[CoreOps] Checkpoint resolvido.\n')
+    }
+
+    return { resolved: updated.resolved, pending }
+  }
+
+  getPendingCheckpoint(): CheckpointState | null {
+    const state = this.stateStore.read()
+    return state?.pending_checkpoint ?? null
+  }
+
+  // ----------------------------------------------------------
   // Phases
   // ----------------------------------------------------------
+
+  private async runBrainstormPhase(): Promise<void> {
+    const state = this.stateStore.read()
+    if (!state) throw new Error('Estado não encontrado.')
+
+    await this.ensureLlm()
+    process.stderr.write('[CoreOps] Executando BrainstormAgent...\n')
+
+    const t0 = Date.now()
+    const result = await this.runner.run<BrainstormInput, BrainstormResult>('brainstorm', {
+      project: state.project,
+      description: state.description,
+      workspace_path: state.workspace_path,
+    })
+
+    // Detectar e aplicar skills baseadas na stack identificada
+    const skills = detectSkills(state.workspace_path, result.tech_stack_detected)
+    this.activeSkills = skills
+
+    this.stateStore.patch({
+      brainstorm_result: result,
+      active_skills: skills.map(s => s.id),
+    })
+
+    // Re-registrar agentes com skills detectadas
+    if (this.llm && skills.length > 0) {
+      this.registerAgents(this.llm, skills)
+      this.events.record('skills_detected', {
+        phase: PipelinePhase.BRAINSTORM,
+        status: 'ok',
+        payload: { skills: skills.map(s => s.id) },
+      })
+    }
+
+    this.memory.add({
+      project: state.project,
+      phase: PipelinePhase.BRAINSTORM,
+      type: 'context',
+      title: 'Brainstorm: ' + state.project,
+      content: [
+        'Modo: ' + result.project_mode,
+        'Descrição refinada: ' + result.refined_description,
+        'Stack: ' + result.tech_stack_detected.join(', '),
+        'Critérios: ' + result.acceptance_criteria.join(' | '),
+      ].join('\n'),
+      tags: ['brainstorm', result.project_mode, ...result.tech_stack_detected],
+    })
+
+    this.events.record('brainstorm_completed', {
+      phase: PipelinePhase.BRAINSTORM,
+      duration_ms: Date.now() - t0,
+      status: 'ok',
+      payload: {
+        project_mode: result.project_mode,
+        tech_stack: result.tech_stack_detected,
+        open_questions: result.open_questions.length,
+        acceptance_criteria: result.acceptance_criteria.length,
+      },
+    })
+
+    process.stderr.write('[CoreOps] Brainstorm concluído. Modo: ' + result.project_mode + '.\n')
+    if (result.tech_stack_detected.length > 0) {
+      process.stderr.write('[CoreOps] Stack detectada: ' + result.tech_stack_detected.join(', ') + '\n')
+    }
+
+      // Criar checkpoint MANUAL (artesanato) - exige resposta do usuário
+      if (result.open_questions.length > 0 && result._is_interactive) {
+        this.createCheckpoint(PipelinePhase.BRAINSTORM, result.open_questions, true)
+        process.stderr.write('[CoreOps] ⚠️ CHECKPOINT MANUAL: responda as perguntas para continuar.\n')
+      } else if (result.open_questions.length > 0) {
+        this.createCheckpoint(PipelinePhase.BRAINSTORM, result.open_questions, false)
+      }
+  }
+
+  private async runArchitecturePhase(): Promise<void> {
+    const state = this.stateStore.read()
+    if (!state) throw new Error('Estado não encontrado.')
+
+    const backlog = this.backlogStore.read()
+    if (!backlog?.plan) {
+      process.stderr.write('[CoreOps] Nenhum plano encontrado. Execute a fase PLANNING primeiro.\n')
+      return
+    }
+
+    await this.ensureLlm()
+    process.stderr.write('[CoreOps] Executando ArchitectAgent...\n')
+
+    const t0 = Date.now()
+    const spec = await this.runner.run<ArchitectInput, ArchitectureSpec>('architect', {
+      plan: backlog.plan,
+      brainstorm_result: state.brainstorm_result ?? null,
+      workspace_path: state.workspace_path,
+    })
+
+    this.stateStore.patch({ architecture_spec: spec })
+
+    this.memory.add({
+      project: state.project,
+      phase: PipelinePhase.ARCHITECTURE,
+      type: 'decision',
+      title: 'Arquitetura: ' + state.project,
+      content: [
+        'Padrões: ' + spec.patterns.join(', '),
+        'Decisões: ' + spec.tech_decisions.map(d => d.concern + ' → ' + d.decision).join(' | '),
+        'Estrutura:\n' + spec.folder_structure,
+      ].join('\n'),
+      tags: ['arquitetura', 'decisão', ...spec.patterns],
+    })
+
+    this.events.record('architecture_completed', {
+      phase: PipelinePhase.ARCHITECTURE,
+      duration_ms: Date.now() - t0,
+      status: 'ok',
+      payload: {
+        patterns: spec.patterns,
+        abstractions: spec.key_abstractions.length,
+        tech_decisions: spec.tech_decisions.length,
+      },
+    })
+
+    process.stderr.write('[CoreOps] Arquitetura definida: ' + spec.patterns.join(', ') + '\n')
+  }
 
   private async runPlanningPhase(): Promise<void> {
     const state = this.stateStore.read()
@@ -306,10 +531,13 @@ export class Orchestrator {
     process.stderr.write('[CoreOps] Executando Planner...\n')
 
     const t0 = Date.now()
+    const checkpoint = state.pending_checkpoint
     const plan = await this.runner.run<PlannerInput, ExecutionPlan>('planner', {
       project: state.project,
       description: state.description,
       workspace_path: state.workspace_path,
+      brainstorm_result: state.brainstorm_result ?? null,
+      checkpoint_answers: checkpoint?.answers ?? {},
     })
 
     await this.backlogStore.savePlan(plan)
@@ -349,9 +577,15 @@ export class Orchestrator {
     await this.ensureLlm()
     process.stderr.write('[CoreOps] Gerando microtasks...\n')
 
+    const state = this.stateStore.read()
+    const archSpec = state?.architecture_spec ?? null
+
     const microtasks: Microtask[] = []
     for (const task of tasks) {
-      const generated = await this.runner.run<Task, Microtask[]>('microtask-generator', task)
+      const generated = await this.runner.run<MicrotaskGeneratorInput, Microtask[]>('microtask-generator', {
+        task,
+        architecture_spec: archSpec,
+      })
       microtasks.push(...generated)
     }
 
@@ -479,13 +713,28 @@ export class Orchestrator {
           const errorLog = validation.errors.join('\n')
           process.stderr.write('  [Validator] Falha: ' + errorLog.substring(0, 200) + '\n')
 
+          // Consultar error store antes de chamar o LLM
+          const priorMatches = this.errorStore.findSimilar(errorLog)
+          const priorSolution = priorMatches.length > 0 && priorMatches[0]
+            ? {
+                root_cause: priorMatches[0]!.root_cause,
+                fix_description: priorMatches[0]!.fix_description,
+                occurrence_count: priorMatches[0]!.occurrence_count,
+              }
+            : null
+
+          if (priorSolution) {
+            process.stderr.write('  [ErrorStore] Solução anterior encontrada (' + priorSolution.occurrence_count + 'x).\n')
+          }
+
           const debug = await this.runner.run<
-            { errors: string[]; patches: import('./types.ts').CodePatch[]; microtask: Microtask },
+            import('../agents/debugger.ts').DebuggerInput,
             import('./types.ts').DebugAnalysis
           >('debugger', {
             errors: validation.errors,
             patches: patches as import('./types.ts').CodePatch[],
             microtask,
+            prior_solution: priorSolution,
           })
 
           await this.applyPatches(debug.fix as import('./types.ts').CodePatch[])
@@ -498,6 +747,18 @@ export class Orchestrator {
             content: 'Causa raiz: ' + debug.root_cause + '\n\nAnálise: ' + debug.analysis,
             tags: ['debug', 'fix'],
           })
+
+          // Registrar erro → solução no error store
+          this.errorStore.record(
+            errorLog,
+            debug.root_cause,
+            debug.analysis.substring(0, 300),
+            projectName,
+          )
+
+          if (priorMatches.length > 0 && priorMatches[0]) {
+            this.errorStore.bumpOccurrence(priorMatches[0]!.id)
+          }
 
           lastError = errorLog
           continue
@@ -628,6 +889,7 @@ export class Orchestrator {
     if (!state) throw new Error('Projeto não inicializado. Execute `coreops start`.')
 
     const pipelineStatus = this.stateMachine.getPipelineStatus()
+    const checkpoint = this.getPendingCheckpoint()
 
     return {
       project: state.project,
@@ -642,6 +904,13 @@ export class Orchestrator {
       started_at: state.started_at,
       last_updated: state.last_updated,
       llm_source: state.llm_source ?? null,
+      pending_checkpoint: checkpoint,
+      brainstorm_session: state.brainstorm_result?._is_interactive ? {
+        interactive: true,
+        session_state: state.brainstorm_result?._session_state,
+        open_questions: state.brainstorm_result?.open_questions,
+        approaches: state.brainstorm_result?._approaches,
+      } : null,
     }
   }
 
@@ -667,7 +936,66 @@ export class Orchestrator {
 
   async next(): Promise<any> {
     if (!this.isInitialized()) throw new Error('Projeto não inicializado.')
-    return this.stateMachine.advanceToNext()
+
+    const checkpoint = this.getPendingCheckpoint()
+    
+    // CRÍTICO: Se há checkpoint não resolvido, BLOQUEIA avanço
+    if (checkpoint && !checkpoint.resolved) {
+      const manualMsg = checkpoint.manual 
+        ? '⚠️ ATENÇÃO: Este checkpoint é MANUAL (artesanato). Responda explicitamente.'
+        : ''
+      return {
+        requires_input: true,
+        checkpoint,
+        message: `⚠️ RESPOSTAS NECESSÁRIAS antes de continuar.\n${manualMsg}\nResponda usando coreops_answer({ answers: { "q1": "sua resposta", ... } })`,
+        blocked_phase: checkpoint.phase,
+        manual: checkpoint.manual,
+      }
+    }
+
+    // Se checkpoint foi resolvido mas é manual, verificar se realmente deve avançar
+    // (para checkpoints manuais, só avanza após resolveCheckpoint explícito)
+    if (checkpoint && checkpoint.resolved && checkpoint.manual) {
+      return {
+        requires_input: false,
+        can_advance: true,
+        message: 'Checkpoint manual resolvido. Pode avançar com coreops next.',
+        checkpoint,
+      }
+    }
+
+    const currentState = this.stateStore.read()
+    const currentPhase = currentState?.current_phase
+
+    // Verificar se há perguntas de clarification PENDENTES no brainstorm_result
+    // Se sim, não avançar até serem respondidas
+    if (currentState?.brainstorm_result?._is_interactive && 
+        currentState?.brainstorm_result?.open_questions?.length > 0 &&
+        currentState?.brainstorm_result?._session_state !== 'approved') {
+      
+      // Não avançar - ainda há diálogo pendente
+      return {
+        requires_input: true,
+        type: 'brainstorm_clarification',
+        questions: currentState.brainstorm_result.open_questions,
+        session_state: currentState.brainstorm_result._session_state,
+        approaches: currentState.brainstorm_result._approaches,
+        message: '⚠️ Brainstorm interativo pendente. Responda as perguntas ou escolha uma abordagem.',
+      }
+    }
+
+    const nextState = await this.stateMachine.advanceToNext()
+    const newPhase = nextState.current_phase
+
+    process.stderr.write(`[CoreOps] Transicionando de ${currentPhase} para ${newPhase}\n`)
+
+    await this.runPhase(newPhase)
+
+    return {
+      phase: newPhase,
+      previous_phase: currentPhase,
+      message: `Fase ${newPhase} iniciada.`,
+    }
   }
 
   getBacklog(): any {

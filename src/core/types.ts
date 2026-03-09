@@ -33,6 +33,86 @@ export const PIPELINE_SEQUENCE: PipelinePhase[] = [
 ]
 
 // ----------------------------------------------------------
+// Brainstorm & Architecture
+// ----------------------------------------------------------
+export type ProjectMode = 'greenfield' | 'refactoring'
+
+export interface BrainstormResult {
+  refined_description: string
+  acceptance_criteria: string[]
+  constraints: string[]
+  out_of_scope: string[]
+  project_mode: ProjectMode
+  codebase_summary: string | null
+  open_questions: string[]
+  tech_stack_detected: string[]
+  // Campos para modo interativo (Superpowers)
+  _brainstorm_session?: BrainstormSession
+  _pending_answer?: string
+  _approaches?: string[]
+  _awaiting_choice?: boolean
+  _design_section?: { title: string; content: string }
+  _awaiting_design_approval?: boolean
+  _is_interactive?: boolean
+  _session_state?: 'initial' | 'clarifying' | 'approaches' | 'design' | 'approved'
+}
+
+export interface CheckpointQuestion {
+  id: string
+  question: string
+  required: boolean
+  hint?: string
+}
+
+export interface CheckpointState {
+  phase: PipelinePhase
+  questions: CheckpointQuestion[]
+  answers: Record<string, string>
+  resolved: boolean
+  manual?: boolean  // true = exige resposta manual do usuário (artesanato)
+}
+
+export interface BrainstormSession {
+  step: 'initial' | 'question' | 'design' | 'approved'
+  initial_description: string
+  questions_asked: { id: string; question: string; answer?: string }[]
+  current_question_index: number
+  proposed_approaches: { name: string; description: string; tradeoffs: string }[]
+  recommended_approach: string | null
+  design_sections: { title: string; content: string; approved: boolean }[]
+  refined_description: string | null
+  acceptance_criteria: string[] | null
+  constraints: string[] | null
+  out_of_scope: string[] | null
+}
+
+export interface BrainstormSessionUpdate {
+  session: BrainstormSession
+  answer: string
+  project: string
+  workspace_path: string
+}
+
+export interface ArchitectureSpec {
+  patterns: string[]
+  folder_structure: string
+  tech_decisions: { concern: string; decision: string; rationale: string }[]
+  conventions: string[]
+  key_abstractions: { name: string; responsibility: string; file_path: string }[]
+}
+
+// ----------------------------------------------------------
+// Skills
+// ----------------------------------------------------------
+export interface Skill {
+  id: string
+  name: string
+  applies_to: string[]
+  context_injection: string
+  detect_patterns: string[]
+}
+
+// ----------------------------------------------------------
 // Project State
 // ----------------------------------------------------------
 export interface ProjectState {
@@ -48,6 +128,11 @@ export interface ProjectState {
   last_transition: string | null
   workspace_path: string
   llm_source: string | null
+  brainstorm_result: BrainstormResult | null
+  architecture_spec: ArchitectureSpec | null
+  pending_checkpoint: CheckpointState | null
+  active_skills: string[]
+  brainstorm_session: BrainstormSession | null
 }
 
 // ----------------------------------------------------------
@@ -144,6 +229,12 @@ export type EventType =
   | 'agent_completed'
   | 'agent_failed'
   | 'error_occurred'
+  | 'checkpoint_created'
+  | 'checkpoint_resolved'
+  | 'brainstorm_completed'
+  | 'architecture_completed'
+  | 'skills_detected'
+  | 'llm_detected'
 
 export interface SystemEvent {
   id: string

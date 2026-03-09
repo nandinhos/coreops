@@ -6,7 +6,7 @@
 import { BaseAgent } from './agent.ts'
 import type { LLMAdapter } from '../llm/types.ts'
 import { parseJsonResponse } from '../llm/anthropic-adapter.ts'
-import type { ExecutionPlan, Task } from '../core/types.ts'
+import type { ExecutionPlan, Task, BrainstormResult } from '../core/types.ts'
 import { PipelinePhase } from '../core/types.ts'
 import { randomUUID } from 'node:crypto'
 
@@ -14,6 +14,8 @@ export interface PlannerInput {
   project: string
   description: string
   workspace_path: string
+  brainstorm_result?: BrainstormResult | null
+  checkpoint_answers?: Record<string, string>
 }
 
 const SYSTEM_PROMPT = `Você é o Planner Agent do CoreOps — um sistema de orquestração de desenvolvimento de software assistido por IA.
@@ -56,10 +58,37 @@ export class PlannerAgent extends BaseAgent<PlannerInput, ExecutionPlan> {
   }
 
   async execute(input: PlannerInput): Promise<ExecutionPlan> {
+    const br = input.brainstorm_result
+
+    const brainstormContext = br
+      ? [
+          '',
+          '## Refinamento do Brainstorm',
+          'Descrição refinada: ' + br.refined_description,
+          'Modo: ' + br.project_mode,
+          'Stack detectada: ' + (br.tech_stack_detected.join(', ') || 'genérica'),
+          '',
+          'Critérios de aceite:',
+          ...br.acceptance_criteria.map(c => '- ' + c),
+          '',
+          'Restrições:',
+          ...br.constraints.map(c => '- ' + c),
+          '',
+          'Fora do escopo:',
+          ...br.out_of_scope.map(c => '- ' + c),
+          br.codebase_summary ? '\nResumo do codebase existente:\n' + br.codebase_summary : '',
+        ].filter(Boolean).join('\n')
+      : ''
+
+    const answersContext = input.checkpoint_answers && Object.keys(input.checkpoint_answers).length > 0
+      ? '\n\n## Respostas às perguntas de refinamento:\n' +
+        Object.entries(input.checkpoint_answers).map(([k, v]) => `- ${k}: ${v}`).join('\n')
+      : ''
+
     const userMessage = `
 Projeto: ${input.project}
 Descrição: ${input.description}
-Workspace: ${input.workspace_path}
+Workspace: ${input.workspace_path}${brainstormContext}${answersContext}
 
 Gere um plano de execução detalhado para implementar este projeto.
 `

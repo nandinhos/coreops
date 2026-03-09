@@ -6,7 +6,8 @@
 import { BaseAgent } from './agent.ts'
 import type { LLMAdapter } from '../llm/types.ts'
 import { parseJsonResponse } from '../llm/anthropic-adapter.ts'
-import type { CodePatch, TestFile, Microtask } from '../core/types.ts'
+import type { CodePatch, TestFile, Microtask, Skill } from '../core/types.ts'
+import { buildSkillContext } from '../skills/skill-registry.ts'
 
 export interface TesterInput {
   patches: CodePatch[]
@@ -42,7 +43,10 @@ FORMATO:
 export class TesterAgent extends BaseAgent<TesterInput, TestFile[]> {
   readonly name = 'tester'
 
-  constructor(private readonly llm: LLMAdapter) {
+  constructor(
+    private readonly llm: LLMAdapter,
+    private readonly skills: Skill[] = [],
+  ) {
     super()
   }
 
@@ -53,7 +57,7 @@ export class TesterAgent extends BaseAgent<TesterInput, TestFile[]> {
       .join('\n\n')
 
     const response = await this.llm.complete({
-      system: SYSTEM_PROMPT,
+      system: SYSTEM_PROMPT + buildSkillContext('tester', this.skills),
       messages: [
         {
           role: 'user',
