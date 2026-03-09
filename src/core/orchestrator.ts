@@ -387,6 +387,17 @@ export class Orchestrator {
         payload: { answers_count: Object.keys(updated.answers).length, manual: checkpoint.manual },
       })
       process.stderr.write('[CoreOps] Checkpoint resolvido.\n')
+
+      // Se o checkpoint era de BRAINSTORM interativo, marcar como aprovado
+      // para que next() não bloqueie no check de brainstorm_result._session_state
+      if (checkpoint.phase === PipelinePhase.BRAINSTORM) {
+        const freshState = this.stateStore.read()
+        if (freshState?.brainstorm_result?._is_interactive) {
+          this.stateStore.patch({
+            brainstorm_result: { ...freshState.brainstorm_result, _session_state: 'approved' },
+          })
+        }
+      }
     }
 
     return { resolved: updated.resolved, pending }
@@ -953,15 +964,9 @@ export class Orchestrator {
       }
     }
 
-    // Se checkpoint foi resolvido mas é manual, verificar se realmente deve avançar
-    // (para checkpoints manuais, só avanza após resolveCheckpoint explícito)
-    if (checkpoint && checkpoint.resolved && checkpoint.manual) {
-      return {
-        requires_input: false,
-        can_advance: true,
-        message: 'Checkpoint manual resolvido. Pode avançar com coreops next.',
-        checkpoint,
-      }
+    // Checkpoint resolvido (manual ou automático): limpar e avançar
+    if (checkpoint && checkpoint.resolved) {
+      this.stateStore.patch({ pending_checkpoint: null })
     }
 
     const currentState = this.stateStore.read()
