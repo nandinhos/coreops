@@ -61,6 +61,13 @@ export interface OrchestratorStatus {
     open_questions?: string[]
     approaches?: string[]
   } | null
+  context: {
+    refined_description?: string
+    tech_stack?: string[]
+    acceptance_criteria?: string[]
+    project_mode?: string
+    plan_objective?: string | null
+  } | null
 }
 
 export class Orchestrator {
@@ -901,6 +908,8 @@ export class Orchestrator {
 
     const pipelineStatus = this.stateMachine.getPipelineStatus()
     const checkpoint = this.getPendingCheckpoint()
+    const backlog = this.backlogStore.read()
+    const br = state.brainstorm_result
 
     return {
       project: state.project,
@@ -916,11 +925,18 @@ export class Orchestrator {
       last_updated: state.last_updated,
       llm_source: state.llm_source ?? null,
       pending_checkpoint: checkpoint,
-      brainstorm_session: state.brainstorm_result?._is_interactive ? {
+      brainstorm_session: br?._is_interactive ? {
         interactive: true,
-        session_state: state.brainstorm_result?._session_state,
-        open_questions: state.brainstorm_result?.open_questions,
-        approaches: state.brainstorm_result?._approaches,
+        session_state: br?._session_state,
+        open_questions: br?.open_questions,
+        approaches: br?._approaches,
+      } : null,
+      context: br ? {
+        refined_description: br.refined_description || state.description,
+        tech_stack: br.tech_stack_detected,
+        acceptance_criteria: br.acceptance_criteria,
+        project_mode: br.project_mode,
+        plan_objective: backlog?.plan?.objective ?? null,
       } : null,
     }
   }

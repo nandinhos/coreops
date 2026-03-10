@@ -54,6 +54,41 @@ export function statusCommand(args: string[]): void {
     }
 
     console.log(``)
+    if (status.context) {
+      const ctx = status.context
+      console.log(`Contexto:`)
+      if (ctx.project_mode) {
+        console.log(`  Modo:        ${ctx.project_mode}`)
+      }
+      if (ctx.tech_stack && ctx.tech_stack.length > 0) {
+        console.log(`  Stack:       ${ctx.tech_stack.join(', ')}`)
+      }
+      if (ctx.plan_objective) {
+        console.log(`  Objetivo:    ${ctx.plan_objective}`)
+      } else if (ctx.refined_description) {
+        console.log(`  Descrição:   ${ctx.refined_description}`)
+      }
+      if (ctx.acceptance_criteria && ctx.acceptance_criteria.length > 0) {
+        console.log(`  Critérios:`)
+        for (const c of ctx.acceptance_criteria) {
+          console.log(`    • ${c}`)
+        }
+      }
+      console.log(``)
+    }
+
+    if (status.pending_checkpoint) {
+      const cp = status.pending_checkpoint
+      console.log(`⚠️  Checkpoint pendente (${cp.phase}):`)
+      for (const q of cp.questions) {
+        const answered = cp.answers[q.id]
+        const mark = answered ? '✓' : '?'
+        console.log(`  ${mark} [${q.id}] ${q.question}`)
+        if (answered) console.log(`       → ${answered}`)
+      }
+      console.log(``)
+    }
+
     console.log(`Iniciado em: ${new Date(status.started_at).toLocaleString('pt-BR')}`)
     console.log(`Atualizado:  ${new Date(status.last_updated).toLocaleString('pt-BR')}`)
   } catch (error) {
